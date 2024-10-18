@@ -15,11 +15,12 @@ mod outside_execution_component {
         get_caller_address, get_contract_address, get_block_timestamp, get_tx_info, account::Call,
         storage::Map
     };
+    use core::starknet::storage_access::StorePacking;
 
     #[storage]
     struct Storage {
         /// Keeps track of used nonces for outside transactions (`execute_from_outside`)
-        outside_nonces: Map<felt252, felt252>,
+        outside_nonces: Map<felt252, u128>,
     }
 
     #[event]
@@ -50,15 +51,20 @@ mod outside_execution_component {
         }
 
         fn is_valid_outside_execution_v3_nonce(
-            self: @ComponentState<TContractState>, nonce: (felt252, felt252)
+            self: @ComponentState<TContractState>, nonce: (felt252, u128)
         ) -> bool {
-            let (channel, index) = nonce;
-            self.outside_nonces.read(channel) == index
+            let (channel, mask) = nonce;
+            if mask == 0_u128 {
+                return false;
+            }
+
+            let current_mask = self.outside_nonces.read(channel);
+            (current_mask & mask) == 0
         }
 
         fn get_outside_execution_v3_channel_nonce(
             self: @ComponentState<TContractState>, channel: felt252
-        ) -> felt252 {
+        ) -> u128 {
             self.outside_nonces.read(channel)
         }
     }
@@ -90,12 +96,10 @@ mod outside_execution_component {
                     && block_timestamp < outside_execution.execute_before,
                 'argent/invalid-timestamp'
             );
-            let (nonce_channel, nonce_index) = outside_execution.nonce;
-            assert(
-                self.is_valid_outside_execution_v3_nonce(outside_execution.nonce),
-                'argent/invalid-outside-nonce'
-            );
-            self.outside_nonces.write(nonce_channel, nonce_index + 1);
+            let (channel, mask) = outside_execution.nonce;
+            let current_mask = self.outside_nonces.read(channel);
+            assert(mask != 0 && (current_mask & mask) == 0, 'argent/invalid-outside-nonce');
+            self.outside_nonces.write(channel, current_mask | mask);
             let mut state = self.get_contract_mut();
             let result = state
                 .execute_from_outside_callback(outside_execution.calls, outside_tx_hash, signature);
@@ -104,4 +108,3 @@ mod outside_execution_component {
         }
     }
 }
-
